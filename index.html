@@ -1,0 +1,1149 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 발표 코치 - Canva & Gemini 연동 발표 피드백 시스템</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    
+    <!-- Babel for JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- html2canvas for Report Image Download -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <!-- Inter Font -->
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
+
+    <style>
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+        }
+        .glass-card {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, #818cf8 0%, #c084fc 50%, #f472b6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(99, 102, 241, 0.5);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="min-h-screen custom-scrollbar">
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Native React SVG Icon component to prevent DOM mutation conflict with React DOM tree
+        const Icon = ({ name, className = "w-5 h-5" }) => {
+            const icons = {
+                'presentation': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M2 3h20"/><path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3"/><path d="m7 21 5-5 5 5"/>
+                    </svg>
+                ),
+                'upload': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>
+                    </svg>
+                ),
+                'bar-chart-3': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M3 3v18h18"/><rect width="4" height="7" x="7" y="10" rx="1"/><rect width="4" height="12" x="15" y="5" rx="1"/>
+                    </svg>
+                ),
+                'book-open': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+                    </svg>
+                ),
+                'message-square': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                ),
+                'info': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>
+                    </svg>
+                ),
+                'sliders': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="1" x2="7" y1="14" y2="14"/><line x1="9" x2="15" y1="8" y2="8"/><line x1="17" x2="23" y1="16" y2="16"/>
+                    </svg>
+                ),
+                'sparkles': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>
+                    </svg>
+                ),
+                'file-text': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>
+                    </svg>
+                ),
+                'align-left': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <line x1="21" x2="3" y1="6" y2="6"/><line x1="15" x2="3" y1="12" y2="12"/><line x1="17" x2="3" y1="18" y2="18"/>
+                    </svg>
+                ),
+                'video': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="m22 8-6 4 6 4V8Z"/><rect width="14" height="12" x="2" y="6" rx="2"/>
+                    </svg>
+                ),
+                'file-video': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m10 11 5 3-5 3v-6Z"/>
+                    </svg>
+                ),
+                'check-circle': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+                    </svg>
+                ),
+                'check-circle-2': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>
+                    </svg>
+                ),
+                'mic': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>
+                    </svg>
+                ),
+                'pause': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <rect width="4" height="16" x="6" y="4" rx="1"/><rect width="4" height="16" x="14" y="4" rx="1"/>
+                    </svg>
+                ),
+                'play': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <polygon points="6 3 20 12 6 21 6 3"/>
+                    </svg>
+                ),
+                'alert-circle': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>
+                    </svg>
+                ),
+                'thumbs-up': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88Z"/>
+                    </svg>
+                ),
+                'trending-up': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+                    </svg>
+                ),
+                'edit-3': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+                    </svg>
+                ),
+                'book-marked': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><polyline points="10 2 10 10 13 7 16 10 16 2"/>
+                    </svg>
+                ),
+                'copy': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+                    </svg>
+                ),
+                'help-circle': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" x2="12.01" y1="17" y2="17"/>
+                    </svg>
+                ),
+                'send': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <line x1="22" x2="11" y1="2" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                    </svg>
+                ),
+                'download': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="3" y2="15"/>
+                    </svg>
+                ),
+                'award': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>
+                    </svg>
+                )
+            };
+            return icons[name] || null;
+        };
+
+        // Sample presentation script for quick demo
+        const SAMPLE_SCRIPT = `안녕하세요! 오늘 명화 해설을 맡은 미술관 큐레이터입니다. 
+어... 여러분은 빈센트 반 고흐의 '별이 빛나는 밤'을 보면서 어떤 감정을 느끼시나요? 
+음... 저는 밤하늘의 역동적인 소용돌이 형태가 고흐의 불안하면서도 열정적인 내면세계를 잘 표현했다고 생각합니다. 
+예를 들어, 어... 그림 중앙의 강렬한 달빛과 별빛은 절망 속에서도 희망을 찾고자 했던 그의 의지를 보여줍니다. 
+따라서 이 작품은 단순한 풍경화가 아닌, 작가의 영혼을 담은 서사시라고 할 수 있습니다. 
+음... 이상으로 큐레이팅을 마치겠습니다. 경청해 주셔서 감사합니다!`;
+
+        // PCM WAV Audio conversion utils for Gemini TTS
+        function pcmToWav(pcm16Data, sampleRate) {
+            const buffer = new ArrayBuffer(44 + pcm16Data.length * 2);
+            const view = new DataView(buffer);
+            
+            function writeString(offset, string) {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            }
+            
+            writeString(0, 'RIFF');
+            view.setUint32(4, 36 + pcm16Data.length * 2, true);
+            writeString(8, 'WAVE');
+            writeString(12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, 1, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * 2, true);
+            view.setUint16(32, 2, true);
+            view.setUint16(34, 16, true);
+            writeString(36, 'data');
+            view.setUint32(40, pcm16Data.length * 2, true);
+            
+            const offset = 44;
+            for (let i = 0; i < pcm16Data.length; i++) {
+                view.setInt16(offset + (i * 2), pcm16Data[i], true);
+            }
+            
+            return new Blob([buffer], { type: 'audio/wav' });
+        }
+
+        function base64ToArrayBuffer(base64) {
+            const binaryString = window.atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        function App() {
+            // Main State
+            const [activeTab, setActiveTab] = useState('input'); // input, report, qa
+            const [inputType, setInputType] = useState('text'); // text, file
+            const [scriptText, setScriptText] = useState('');
+            const [selectedFile, setSelectedFile] = useState(null);
+            const [fileBase64, setFileBase64] = useState(null);
+            const [fileMimeType, setFileMimeType] = useState('');
+            const [gradeLevel, setGradeLevel] = useState('고등학생');
+            const [purpose, setPurpose] = useState('수행평가 발표');
+
+            // Analysis State
+            const [isAnalyzing, setIsAnalyzing] = useState(false);
+            const [analysisProgress, setAnalysisProgress] = useState('');
+            const [reportData, setReportData] = useState(null);
+            const [isDownloading, setIsDownloading] = useState(false);
+
+            // Ref for report image capture
+            const reportRef = useRef(null);
+
+            // TTS Audio Coach State
+            const [isGeneratingSpeech, setIsGeneratingSpeech] = useState(false);
+            const [audioUrl, setAudioUrl] = useState(null);
+            const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+            const audioRef = useRef(null);
+
+            // Interactive Q&A State
+            const [qaHistory, setQaHistory] = useState([]);
+            const [userQaAnswer, setUserQaAnswer] = useState('');
+            const [isSubmittingQa, setIsSubmittingQa] = useState(false);
+            const [activeQuestionIdx, setActiveQuestionIdx] = useState(0);
+
+            // Toast Message State
+            const [toastMessage, setToastMessage] = useState('');
+
+            const showToast = (msg) => {
+                setToastMessage(msg);
+                setTimeout(() => setToastMessage(''), 3000);
+            };
+
+            // Image Report Download
+            const handleDownloadReportImage = async () => {
+                if (!reportRef.current) return;
+                setIsDownloading(true);
+                showToast("피드백 리포트 이미지 생성 중...");
+
+                try {
+                    const canvas = await html2canvas(reportRef.current, {
+                        backgroundColor: '#0f172a',
+                        scale: 2, // High resolution
+                        useCORS: true,
+                        logging: false
+                    });
+
+                    const image = canvas.toDataURL('image/png');
+                    const link = document.createElement('a');
+                    link.href = image;
+                    link.download = `큐레이터_말하기수행평가_피드백리포트.png`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+
+                    showToast("피드백 리포트가 이미지(PNG)로 저장되었습니다!");
+                } catch (err) {
+                    console.error("Image download error:", err);
+                    showToast("이미지 저장 중 오류가 발생했습니다.");
+                } finally {
+                    setIsDownloading(false);
+                }
+            };
+
+            // Handle File Select (Canva video/audio recording - Raised limit to 100MB)
+            const handleFileChange = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                if (file.size > 100 * 1024 * 1024) {
+                    showToast("파일 크기가 100MB를 초과합니다. 100MB 이하의 파일로 시도해주세요.");
+                    return;
+                }
+
+                setSelectedFile(file);
+                setFileMimeType(file.type);
+
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const base64String = reader.result.split(',')[1];
+                    setFileBase64(base64String);
+                };
+                reader.readAsDataURL(file);
+            };
+
+            // Sample Input Loader
+            const loadSampleData = () => {
+                setInputType('text');
+                setScriptText(SAMPLE_SCRIPT);
+                showToast("큐레이터 수행평가 샘플 대본이 로드되었습니다.");
+            };
+
+            const handleAnalyzePresentation = async () => {
+                if (inputType === 'text' && !scriptText.trim()) {
+                    showToast("발표 대본을 입력하거나 샘플 데이터를 선택해주세요.");
+                    return;
+                }
+                if (inputType === 'file' && !fileBase64) {
+                    showToast("캔바 녹화 파일(영상/음성)을 업로드해주세요.");
+                    return;
+                }
+
+                setIsAnalyzing(true);
+                setAnalysisProgress("말하기 수행평가 채점 기준 적용 중...");
+
+                try {
+                    const apiKey = ""; // Canvas runtime environment automatically inserts API key
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+
+                    const systemInstruction = `당신은 대한민국 학교 수행평가 전문 피드백 AI 코치입니다.
+[중요 조건]
+1. 모든 학생은 '미술관/박물관 큐레이터' 컨셉으로 동일하게 발표합니다. 따라서 "큐레이터 컨셉을 추천한다"거나 "큐레이터처럼 하라"는 식의 컨셉에 대한 지적/칭찬/언급은 피드백에서 완전히 제외하세요.
+2. 수행평가 '말하기' 채점 기준에 따라 실용적이고 세부적인 피드백을 제공해야 합니다.
+
+대상 학년: ${gradeLevel}, 발표 목적: ${purpose}.
+
+다음 JSON 구조에 맞춰 엄격하게 결과를 생성하십시오:
+1. overallScore (0~100)
+2. scores: { structure (내용 구성), delivery (발음/성량/어조), clarity (전달력/명확성), engagement (청중 태도/시선) }
+3. summary: 말하기 수행평가 전체 한줄평 및 종합 소평
+4. speakingCriteria: 말하기 수행평가 4대 필수 평가 항목별 상세 평가 배열
+   [
+     { criteriaName: "발음, 성량 및 속도", score: "상/중/하 또는 점수", feedback: "상세 피드백" },
+     { criteriaName: "시선 처리 및 발표 태도", score: "상/중/하 또는 점수", feedback: "상세 피드백" },
+     { criteriaName: "내용의 적절성 및 구성력", score: "상/중/하 또는 점수", feedback: "상세 피드백" },
+     { criteriaName: "제한시간 및 습관어/추임새 관리", score: "상/중/하 또는 점수", feedback: "상세 피드백" }
+   ]
+5. strengths: 말하기 수행평가 기준 잘한 점 3가지 (배열)
+6. improvements: 말하기 수행평가 감점 방지를 위한 보완점 3가지 (배열)
+7. fillerWordCount: { eoh: '어' 횟수, eum: '음' 횟수, total: 전체 습관어 횟수 }
+8. scriptImprovements: 대본 전달력 향상 교정 목록 [{ original: "기존 문장", suggested: "교정 문장", reason: "교정 이유" }]
+9. expectedQuestions: 예상 청중/교사 질의응답 3개 [{ id: 1, question: "질문 내용", tip: "답변 팁", sampleAnswer: "모범 답변" }]
+10. coachVoiceScript: 학생에게 다정하게 말해줄 200자 이내의 말하기 코치 음성 피드백`;
+
+                    let contents = [];
+
+                    if (inputType === 'text') {
+                        contents = [{
+                            role: 'user',
+                            parts: [{ text: `다음은 학생의 큐레이터 말하기 수행평가 제출 대본입니다. 말하기 평가 기준에 맞춰 피드백해 주세요:\n\n${scriptText}` }]
+                        }];
+                    } else {
+                        contents = [{
+                            role: 'user',
+                            parts: [
+                                { text: "학생의 큐레이터 말하기 수행평가 녹화 파일입니다. 음성과 발화 내용을 말하기 채점 기준에 따라 분석해 주세요." },
+                                {
+                                    inlineData: {
+                                        mimeType: fileMimeType,
+                                        data: fileBase64
+                                    }
+                                }
+                            ]
+                        }];
+                    }
+
+                    const payload = {
+                        contents: contents,
+                        systemInstruction: { parts: [{ text: systemInstruction }] },
+                        generationConfig: {
+                            responseMimeType: "application/json",
+                            responseSchema: {
+                                type: "OBJECT",
+                                properties: {
+                                    overallScore: { type: "NUMBER" },
+                                    scores: {
+                                        type: "OBJECT",
+                                        properties: {
+                                            structure: { type: "NUMBER" },
+                                            delivery: { type: "NUMBER" },
+                                            clarity: { type: "NUMBER" },
+                                            engagement: { type: "NUMBER" }
+                                        },
+                                        required: ["structure", "delivery", "clarity", "engagement"]
+                                    },
+                                    summary: { type: "STRING" },
+                                    speakingCriteria: {
+                                        type: "ARRAY",
+                                        items: {
+                                            type: "OBJECT",
+                                            properties: {
+                                                criteriaName: { type: "STRING" },
+                                                score: { type: "STRING" },
+                                                feedback: { type: "STRING" }
+                                            },
+                                            required: ["criteriaName", "score", "feedback"]
+                                        }
+                                    },
+                                    strengths: { type: "ARRAY", items: { type: "STRING" } },
+                                    improvements: { type: "ARRAY", items: { type: "STRING" } },
+                                    fillerWordCount: {
+                                        type: "OBJECT",
+                                        properties: {
+                                            eoh: { type: "NUMBER" },
+                                            eum: { type: "NUMBER" },
+                                            total: { type: "NUMBER" }
+                                        },
+                                        required: ["eoh", "eum", "total"]
+                                    },
+                                    scriptImprovements: {
+                                        type: "ARRAY",
+                                        items: {
+                                            type: "OBJECT",
+                                            properties: {
+                                                original: { type: "STRING" },
+                                                suggested: { type: "STRING" },
+                                                reason: { type: "STRING" }
+                                            },
+                                            required: ["original", "suggested", "reason"]
+                                        }
+                                    },
+                                    expectedQuestions: {
+                                        type: "ARRAY",
+                                        items: {
+                                            type: "OBJECT",
+                                            properties: {
+                                                id: { type: "NUMBER" },
+                                                question: { type: "STRING" },
+                                                tip: { type: "STRING" },
+                                                sampleAnswer: { type: "STRING" }
+                                            },
+                                            required: ["id", "question", "tip", "sampleAnswer"]
+                                        }
+                                    },
+                                    coachVoiceScript: { type: "STRING" }
+                                },
+                                required: ["overallScore", "scores", "summary", "speakingCriteria", "strengths", "improvements", "fillerWordCount", "scriptImprovements", "expectedQuestions", "coachVoiceScript"]
+                            }
+                        }
+                    };
+
+                    let response;
+                    let retries = 3;
+                    let delay = 1000;
+
+                    while (retries > 0) {
+                        try {
+                            response = await fetch(apiUrl, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(payload)
+                            });
+                            if (response.ok) break;
+                        } catch (err) {
+                            console.log("Retry attempt due to fetch error...", err);
+                        }
+                        retries--;
+                        if (retries > 0) {
+                            await new Promise(r => setTimeout(r, delay));
+                            delay *= 2;
+                        }
+                    }
+
+                    if (!response || !response.ok) {
+                        throw new Error("Gemini API 분석 요청 실패");
+                    }
+
+                    const result = await response.json();
+                    const parsedJson = JSON.parse(result.candidates[0].content.parts[0].text);
+
+                    setReportData(parsedJson);
+                    setActiveTab('report');
+                    showToast("말하기 수행평가 피드백이 완성되었습니다!");
+
+                    if (parsedJson.coachVoiceScript) {
+                        generateCoachAudio(parsedJson.coachVoiceScript);
+                    }
+
+                } catch (error) {
+                    console.error("Analysis error:", error);
+                    showToast("분석 중 오류가 발생했습니다. 파일 크기가 크다면 텍스트 입력 방식을 권장합니다.");
+                } finally {
+                    setIsAnalyzing(false);
+                    setAnalysisProgress('');
+                }
+            };
+
+            const generateCoachAudio = async (textToSpeak) => {
+                setIsGeneratingSpeech(true);
+                try {
+                    const apiKey = "";
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+
+                    const payload = {
+                        contents: [{
+                            parts: [{ text: `따뜻하고 전문적인 발표 코치 톤으로 학생에게 말해줘: ${textToSpeak}` }]
+                        }],
+                        generationConfig: {
+                            responseModalities: ["AUDIO"],
+                            speechConfig: {
+                                voiceConfig: {
+                                    prebuiltVoiceConfig: { voiceName: "Kore" }
+                                }
+                            }
+                        }
+                    };
+
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) throw new Error("TTS Generation failed");
+
+                    const result = await response.json();
+                    const part = result?.candidates?.[0]?.content?.parts?.[0];
+                    const audioData = part?.inlineData?.data;
+                    const mimeType = part?.inlineData?.mimeType;
+
+                    if (audioData && mimeType && mimeType.startsWith("audio/")) {
+                        const sampleRateMatch = mimeType.match(/rate=(\d+)/);
+                        const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 24000;
+
+                        const pcmBuffer = base64ToArrayBuffer(audioData);
+                        const pcm16 = new Int16Array(pcmBuffer);
+                        const wavBlob = pcmToWav(pcm16, sampleRate);
+                        const url = URL.createObjectURL(wavBlob);
+                        setAudioUrl(url);
+                    }
+                } catch (err) {
+                    console.error("TTS Audio error:", err);
+                } finally {
+                    setIsGeneratingSpeech(false);
+                }
+            };
+
+            const togglePlayAudio = () => {
+                if (!audioRef.current || !audioUrl) return;
+                if (isPlayingAudio) {
+                    audioRef.current.pause();
+                    setIsPlayingAudio(false);
+                } else {
+                    audioRef.current.play();
+                    setIsPlayingAudio(true);
+                }
+            };
+
+            const handleAnswerQuestion = async () => {
+                if (!userQaAnswer.trim() || !reportData) return;
+
+                setIsSubmittingQa(true);
+                const currentQ = reportData.expectedQuestions[activeQuestionIdx];
+
+                try {
+                    const apiKey = "";
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+
+                    const prompt = `학생 발표 예상 질문에 대한 답변 평가:
+질문: "${currentQ.question}"
+학생 답변: "${userQaAnswer}"
+
+이 답변에 대해 친절한 AI 발표 코치로서 칭찬할 점과 추가 보완점, 점수(100점 만점)를 주어 피드백해 주세요.`;
+
+                    const payload = {
+                        contents: [{ parts: [{ text: prompt }] }],
+                        systemInstruction: { parts: [{ text: "당신은 학생 발표 면접 피드백을 제공하는 친절한 멘토입니다." }] }
+                    };
+
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const result = await response.json();
+                    const feedbackText = result.candidates[0].content.parts[0].text;
+
+                    setQaHistory(prev => [
+                        ...prev,
+                        {
+                            question: currentQ.question,
+                            userAnswer: userQaAnswer,
+                            feedback: feedbackText
+                        }
+                    ]);
+                    setUserQaAnswer('');
+                    showToast("답변 피드백이 추가되었습니다.");
+                } catch (err) {
+                    console.error("QA evaluation error:", err);
+                    showToast("피드백 생성 중 오류가 발생했습니다.");
+                } finally {
+                    setIsSubmittingQa(false);
+                }
+            };
+
+            const copyToClipboard = (text) => {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                try {
+                    document.execCommand('copy');
+                    showToast("클립보드에 복사되었습니다!");
+                } catch (err) {
+                    showToast("복사 실패");
+                }
+                document.body.removeChild(textarea);
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col min-h-screen">
+                    {/* Header */}
+                    <header className="flex flex-col md:flex-row items-center justify-between gap-4 mb-8 pb-6 border-b border-slate-800">
+                        <div className="flex items-center gap-3">
+                            <div className="p-3 bg-indigo-600/20 border border-indigo-500/30 rounded-2xl text-indigo-400">
+                                <Icon name="presentation" className="w-8 h-8" />
+                            </div>
+                            <div>
+                                <h1 className="text-2xl font-bold gradient-text">AI 말하기 수행평가 코치</h1>
+                                <p className="text-xs text-slate-400">큐레이터 발표 수행평가 채점 기준 기반 AI 피드백 시스템</p>
+                            </div>
+                        </div>
+
+                        {/* Navigation Tabs */}
+                        <div className="flex bg-slate-900/80 p-1.5 rounded-xl border border-slate-800 text-sm">
+                            <button 
+                                onClick={() => setActiveTab('input')}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${activeTab === 'input' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
+                                <Icon name="upload" className="w-4 h-4" />
+                                발표 제출
+                            </button>
+                            <button 
+                                onClick={() => reportData ? setActiveTab('report') : showToast("먼저 발표 제출 후 분석을 진행해 주세요.")}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${activeTab === 'report' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
+                                <Icon name="bar-chart-3" className="w-4 h-4" />
+                                피드백 리포트
+                            </button>
+                            <button 
+                                onClick={() => reportData ? setActiveTab('qa') : showToast("분석 완료 후 사용 가능합니다.")}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${activeTab === 'qa' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
+                                <Icon name="message-square" className="w-4 h-4" />
+                                Q&A 모의 훈련
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Toast Alert */}
+                    {toastMessage && (
+                        <div className="fixed bottom-6 right-6 z-50 bg-indigo-600 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-indigo-400 animate-bounce">
+                            <Icon name="info" className="w-5 h-5" />
+                            <span className="text-sm font-medium">{toastMessage}</span>
+                        </div>
+                    )}
+
+                    {/* Main Content Area */}
+                    <main className="flex-1">
+                        {/* TAB 1: INPUT & UPLOAD */}
+                        {activeTab === 'input' && (
+                            <div className="grid md:grid-cols-3 gap-6">
+                                {/* Left Options Panel */}
+                                <div className="glass-card p-6 rounded-2xl flex flex-col gap-5">
+                                    <h2 className="text-lg font-semibold flex items-center gap-2 text-indigo-300">
+                                        <Icon name="sliders" className="w-5 h-5" />
+                                        발표 설정
+                                    </h2>
+
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-2">발표자 대상 학년</label>
+                                        <select 
+                                            value={gradeLevel} 
+                                            onChange={(e) => setGradeLevel(e.target.value)}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm focus:outline-none focus:border-indigo-500">
+                                            <option value="초등학생">초등학생</option>
+                                            <option value="중학생">중학생</option>
+                                            <option value="고등학생">고등학생</option>
+                                            <option value="대학생/일반">대학생 / 일반</option>
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-2">발표 목적</label>
+                                        <select 
+                                            value={purpose} 
+                                            onChange={(e) => setPurpose(e.target.value)}
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm focus:outline-none focus:border-indigo-500">
+                                            <option value="수행평가 발표">수행평가 / 수업 발표</option>
+                                            <option value="공모전/경진대회">공모전 / 경진대회</option>
+                                            <option value="동아리/연구 발표">동아리 / 연구 발표</option>
+                                            <option value="입학/면접 발표">대입 / 면접 발표</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="pt-4 border-t border-slate-800">
+                                        <div className="bg-indigo-950/40 p-4 rounded-xl border border-indigo-800/40 text-xs text-indigo-200 leading-relaxed">
+                                            <p className="font-semibold mb-1 flex items-center gap-1 text-indigo-300">
+                                                <Icon name="sparkles" className="w-4 h-4" /> 캔바(Canva) 활용 팁
+                                            </p>
+                                            캔바 상단 [공유] ➔ [자세히 보기] ➔ [프레젠테이션 및 녹화] 기능을 사용하면 학생이 슬라이드를 넘기며 말하는 발표 동영상(MP4)을 쉽게 추출할 수 있습니다.
+                                        </div>
+                                    </div>
+
+                                    <button 
+                                        onClick={loadSampleData}
+                                        className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium rounded-xl text-slate-300 transition flex items-center justify-center gap-2">
+                                        <Icon name="file-text" className="w-4 h-4 text-indigo-400" />
+                                        샘플 대본으로 체험해보기
+                                    </button>
+                                </div>
+
+                                {/* Right Main Input Form */}
+                                <div className="md:col-span-2 glass-card p-6 rounded-2xl flex flex-col justify-between gap-6">
+                                    <div>
+                                        {/* Input Mode Selector */}
+                                        <div className="flex gap-4 border-b border-slate-800 pb-4 mb-5">
+                                            <button 
+                                                onClick={() => setInputType('text')}
+                                                className={`flex items-center gap-2 pb-2 text-sm font-medium border-b-2 transition ${inputType === 'text' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400'}`}>
+                                                <Icon name="align-left" className="w-4 h-4" />
+                                                발표 대본 직접 입력
+                                            </button>
+                                            <button 
+                                                onClick={() => setInputType('file')}
+                                                className={`flex items-center gap-2 pb-2 text-sm font-medium border-b-2 transition ${inputType === 'file' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400'}`}>
+                                                <Icon name="video" className="w-4 h-4" />
+                                                캔바 녹화 파일 업로드 (MP4 / MP3)
+                                            </button>
+                                        </div>
+
+                                        {inputType === 'text' ? (
+                                            <div>
+                                                <label className="block text-xs text-slate-400 mb-2">발표 대본 텍스트</label>
+                                                <textarea 
+                                                    rows="12"
+                                                    value={scriptText}
+                                                    onChange={(e) => setScriptText(e.target.value)}
+                                                    placeholder="여기에 발표할 대본 전체 내용을 붙여넣으세요. (습관어 '어..', '음..' 등을 포함하면 더 정확히 분석됩니다)"
+                                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl p-4 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 leading-relaxed custom-scrollbar">
+                                                </textarea>
+                                            </div>
+                                        ) : (
+                                            <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-700 hover:border-indigo-500 rounded-2xl p-8 transition bg-slate-900/50 my-4">
+                                                <Icon name="file-video" className="w-12 h-12 text-indigo-400 mb-3" />
+                                                <p className="text-sm font-medium mb-1">캔바 녹화 영상 또는 음성 파일 제출</p>
+                                                <p className="text-xs text-slate-500 mb-4">MP4, WebM, MP3, WAV 지원 (최대 100MB)</p>
+
+                                                <input 
+                                                    type="file" 
+                                                    accept="video/*,audio/*"
+                                                    id="presentation-file"
+                                                    onChange={handleFileChange}
+                                                    className="hidden"
+                                                />
+                                                <label 
+                                                    htmlFor="presentation-file"
+                                                    className="cursor-pointer bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-5 py-2.5 rounded-xl transition">
+                                                    파일 선택하기
+                                                </label>
+
+                                                {selectedFile && (
+                                                    <div className="mt-4 p-3 bg-slate-800 rounded-xl border border-slate-700 flex items-center gap-3 text-xs text-emerald-400">
+                                                        <Icon name="check-circle" className="w-4 h-4" />
+                                                        <span>{selectedFile.name} ({(selectedFile.size / (1024*1024)).toFixed(1)}MB)</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Submit Button */}
+                                    <button 
+                                        onClick={handleAnalyzePresentation}
+                                        disabled={isAnalyzing}
+                                        className="w-full py-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:opacity-90 text-white font-bold rounded-xl shadow-xl transition flex items-center justify-center gap-3 disabled:opacity-50">
+                                        {isAnalyzing ? (
+                                            <>
+                                                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                                <span>{analysisProgress || "제미나이 AI가 발표 분석 중..."}</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Icon name="sparkles" className="w-5 h-5" />
+                                                <span>제미나이 AI 발표 코칭 시작하기</span>
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* TAB 2: FEEDBACK REPORT */}
+                        {activeTab === 'report' && reportData && (
+                            <div className="space-y-6">
+                                {/* Download & Audio Control Top Bar */}
+                                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 glass-card p-4 rounded-2xl border-indigo-500/30">
+                                    <div className="text-xs text-indigo-300 font-semibold flex items-center gap-2">
+                                        <Icon name="award" className="w-4 h-4 text-indigo-400" />
+                                        큐레이터 말하기 수행평가 채점 결과 리포트
+                                    </div>
+                                    <button 
+                                        onClick={handleDownloadReportImage}
+                                        disabled={isDownloading}
+                                        className="w-full sm:w-auto px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:opacity-90 text-white text-xs font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-lg disabled:opacity-50">
+                                        <Icon name="download" className="w-4 h-4" />
+                                        {isDownloading ? "이미지 생성 중..." : "리포트 이미지(PNG) 다운로드"}
+                                    </button>
+                                </div>
+
+                                {/* Report Content Container to Capture as Image */}
+                                <div ref={reportRef} className="p-6 bg-slate-950 rounded-2xl border border-slate-800 space-y-6">
+                                    {/* Audio Coach Bar */}
+                                    {reportData.coachVoiceScript && (
+                                        <div className="glass-card p-5 rounded-2xl border-indigo-500/30 bg-gradient-to-r from-indigo-950/60 to-purple-950/60 flex flex-col md:flex-row items-center justify-between gap-4">
+                                            <div className="flex items-center gap-4">
+                                                <div className="p-3 bg-indigo-600 rounded-xl text-white shadow-lg">
+                                                    <Icon name="mic" className="w-6 h-6" />
+                                                </div>
+                                                <div>
+                                                    <h3 className="text-sm font-semibold text-indigo-200">AI 말하기 코치의 음성 평가</h3>
+                                                    <p className="text-xs text-slate-300 italic">"{reportData.coachVoiceScript}"</p>
+                                                </div>
+                                            </div>
+
+                                            {audioUrl ? (
+                                                <div className="flex items-center gap-3">
+                                                    <audio ref={audioRef} src={audioUrl} onEnded={() => setIsPlayingAudio(false)} />
+                                                    <button 
+                                                        onClick={togglePlayAudio}
+                                                        className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition flex items-center gap-2 shadow-md">
+                                                        <Icon name={isPlayingAudio ? "pause" : "play"} className="w-4 h-4" />
+                                                        {isPlayingAudio ? "일시정지" : "음성 피드백 듣기"}
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <div className="text-xs text-slate-400 flex items-center gap-2">
+                                                    {isGeneratingSpeech ? (
+                                                        <>
+                                                            <div className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></div>
+                                                            <span>음성 합성 중...</span>
+                                                        </>
+                                                    ) : (
+                                                        <span>음성을 불러오지 못했습니다</span>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Score & Overview Grid */}
+                                    <div className="grid md:grid-cols-3 gap-6">
+                                        {/* Overall Score Card */}
+                                        <div className="glass-card p-6 rounded-2xl flex flex-col items-center justify-center text-center relative overflow-hidden">
+                                            <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full blur-2xl"></div>
+                                            <span className="text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-2">말하기 수행평가 총점</span>
+                                            <div className="text-6xl font-extrabold text-white mb-2 tracking-tight">
+                                                {reportData.overallScore}<span className="text-2xl text-slate-500 font-normal">/100</span>
+                                            </div>
+                                            <p className="text-xs text-slate-300 max-w-xs">{reportData.summary}</p>
+                                        </div>
+
+                                        {/* Detailed Sub Scores */}
+                                        <div className="glass-card p-6 rounded-2xl md:col-span-2 flex flex-col justify-between gap-4">
+                                            <h3 className="text-sm font-semibold text-slate-300 mb-1 flex items-center gap-2">
+                                                <Icon name="check-circle-2" className="w-4 h-4 text-indigo-400" />
+                                                영역별 세부 평점
+                                            </h3>
+
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <div className="flex justify-between text-xs mb-1">
+                                                        <span className="text-slate-400">내용 구성 및 논리</span>
+                                                        <span className="font-semibold text-indigo-400">{reportData.scores.structure}점</span>
+                                                    </div>
+                                                    <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                                                        <div className="bg-indigo-500 h-full rounded-full" style={{ width: `${reportData.scores.structure}%` }}></div>
+                                                    </div>
+                                                </div>
+
+                                                <div>
+                                                    <div className="flex justify-between text-xs mb-1">
+                                                        <span className="text-slate-400">발음 / 성량 / 어조</span>
+                                                        <span className="font-semibold text-purple-400">{reportData.scores.delivery}점</span>
+                                                    </div>
+                                                    <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                                                        <div className="bg-purple-500 h-full rounded-full" style={{ width: `${reportData.scores.delivery}%` }}></div>
+                                                    </div>
+                                                </div>
+
+                                                <div>
+                                                    <div className="flex justify-between text-xs mb-1">
+                                                        <span className="text-slate-400">전달력 및 명확성</span>
+                                                        <span className="font-semibold text-pink-400">{reportData.scores.clarity}점</span>
+                                                    </div>
+                                                    <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                                                        <div className="bg-pink-500 h-full rounded-full" style={{ width: `${reportData.scores.clarity}%` }}></div>
+                                                    </div>
+                                                </div>
+
+                                                <div>
+                                                    <div className="flex justify-between text-xs mb-1">
+                                                        <span className="text-slate-400">발표 태도 및 시선</span>
+                                                        <span className="font-semibold text-emerald-400">{reportData.scores.engagement}점</span>
+                                                    </div>
+                                                    <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                                                        <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${reportData.scores.engagement}%` }}></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Filler word count stat */}
+                                            <div className="mt-2 pt-3 border-t border-slate-800 flex items-center justify-between text-xs">
+                                                <span className="text-slate-400 flex items-center gap-1.5">
+                                                    <Icon name="alert-circle" className="w-4 h-4 text-amber-400" />
+                                                    불필요한 추임새/습관어 ('어', '음' 등)
+                                                </span>
+                                                <span className="px-2.5 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-lg font-bold">
+                                                    총 {reportData.fillerWordCount.total}회 감지
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* MANDATORY: Speaking Evaluation Criteria Table */}
+                                    {reportData.speakingCriteria && reportData.speakingCriteria.length > 0 && (
+                                        <div className="glass-card p-6 rounded-2xl">
+                                            <h3 className="text-sm font-semibold text-indigo-300 mb-4 flex items-center gap-2">
+                                                <Icon name="award" className="w-4 h-4" />
+                                                수행평가 '말하기' 영역 항목별 핵심 채점 기준
+                                            </h3>
+                                            <div className="grid md:grid-cols-2 gap-4">
+                                                {reportData.speakingCriteria.map((crit, idx) => (
+                                                    <div key={idx} className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 text-xs space-y-2">
+                                                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                                                            <span className="font-bold text-indigo-200">{crit.criteriaName}</span>
+                                                            <span className="px-2.5 py-0.5 bg-indigo-500/20 text-indigo-300 font-bold rounded-lg border border-indigo-500/30">
+                                                                {crit.score}
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-slate-300 leading-relaxed pt-1">{crit.feedback}</p>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Strengths & Weaknesses */}
+                                    <div className="grid md:grid-cols-2 gap-6">
+                                        <div className="glass-card p-6 rounded-2xl">
+                                            <h3 className="text-sm font-semibold text-emerald-400 mb-4 flex items-center gap-2">
+                                                <Icon name="thumbs-up" className="w-4 h-4" />
+                                                말하기 잘한 점 (우수 항목)
+                                            </h3>
+                                            <ul className="space-y-2.5 text-xs text-slate-300">
+                                                {reportData.strengths.map((item, idx) => (
+                                                    <li key={idx} className="flex items-start gap-2 bg-slate-900/40 p-3 rounded-xl border border-slate-800">
+                                                        <span className="text-emerald-400 font-bold">•</span>
+                                                        <span>{item}</span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+
+                                        <div className="glass-card p-6 rounded-2xl">
+                                            <h3 className="text-sm font-semibold text-amber-400 mb-4 flex items-center gap-2">
+                                                <Icon name="trending-up" className="w-4 h-4" />
+                                                감점 방지를 위한 말하기 보완점
+                                            </h3>
+                                            <ul className="space-y-2.5 text-xs text-slate-300">
+                                                {reportData.improvements.map((item, idx) => (
+                                                    <li key={idx} className="flex items-start gap-2 bg-slate-900/40 p-3 rounded-xl border border-slate-800">
+                                                        <span className="text-amber-400 font-bold">•</span>
+                                                        <span>{item}</span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    </div>
+
+                                    {/* Script Polish Suggestions */}
+                                    <div className="glass-card p-6 rounded-2xl">
+                                        <h3 className="text-sm font-semibold text-indigo-300 mb-4 flex items-center gap-2">
+                                            <Icon name="edit-3" className="w-4 h-4" />
+                                            말하기 전달력 향상을 위한 표현 교정 (Before vs After)
+                                        </h3>
+                                        <div className="space-y-4">
+                                            {reportData.scriptImprovements.map((item, idx) => (
+                                                <div key={idx} className="bg-slate-900/60 p-4 rounded-xl border border-slate-800 text-xs space-y-2">
+                                                    <div className="flex items-start gap-2 text-rose-300">
+                                                        <span className="px-2 py-0.5 bg-rose-500/20 text-rose-400 font-bold rounded">기존</span>
+                                                        <p className="line-through text-slate-400">{item.original}</p>
+                                                    </div>
+                                                    <div className="flex items-start gap-2 text-emerald-300 font-medium">
+                                                        <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 font-bold rounded">추천</span>
+                                                        <p>{item.suggested}</p>
+                                                    </div>
+                                                    <p className="text-slate-500 text-[11px] pl-10">💡 이유: {item.reason}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* TAB 3: MOCK Q&A TRAINER */}
+                        {activeTab === 'qa' && reportData && (
+                            <div className="grid md:grid-cols-3 gap-6">
+                                {/* Questions List */}
+                                <div className="glass-card p-6 rounded-2xl flex flex-col gap-4">
+                                    <h3 className="text-sm font-semibold text-indigo-300 flex items-center gap-2">
+                                        <Icon name="help-circle" className="w-4 h-4" />
+                                        예상 질문 선택
+                                    </h3>
+
+                                    <div className="space-y-3">
+                                        {reportData.expectedQuestions.map((q, idx) => (
+                                            <div 
+                                                key={idx}
+                                                onClick={() => setActiveQuestionIdx(idx)}
+                                                className={`p-4 rounded-xl border text-xs cursor-pointer transition ${activeQuestionIdx === idx ? 'bg-indigo-600/20 border-indigo-500 text-white' : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200'}`}>
+                                                <div className="font-bold mb-1 text-indigo-400">질문 {idx + 1}</div>
+                                                <p className="line-clamp-2">{q.question}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Active Question & Practice Interface */}
+                                <div className="md:col-span-2 glass-card p-6 rounded-2xl flex flex-col justify-between gap-6">
+                                    <div className="space-y-4">
+                                        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+                                            <span className="text-xs text-indigo-400 font-bold uppercase tracking-wider">선택된 예상 질문</span>
+                                            <h3 className="text-base font-bold text-white mt-1">
+                                                {reportData.expectedQuestions[activeQuestionIdx].question}
+                                            </h3>
+                                            <p className="text-xs text-slate-400 mt-2 bg-slate-800/80 p-2.5 rounded-lg border border-slate-700/50">
+                                                💡 코치의 답변 팁: {reportData.expectedQuestions[activeQuestionIdx].tip}
+                                            </p>
+                                        </div>
+
+                                        {/* Answer Input */}
+                                        <div>
+                                            <label className="block text-xs text-slate-400 mb-2">나의 답변 실전 연습</label>
+                                            <textarea 
+                                                rows="4"
+                                                value={userQaAnswer}
+                                                onChange={(e) => setUserQaAnswer(e.target.value)}
+                                                placeholder="질문에 대해 어떻게 답변할지 적어보세요..."
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
+                                            </textarea>
+                                        </div>
+
+                                        <button 
+                                            onClick={handleAnswerQuestion}
+                                            disabled={isSubmittingQa || !userQaAnswer.trim()}
+                                            className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl transition flex items-center justify-center gap-2 disabled:opacity-50">
+                                            {isSubmittingQa ? (
+                                                <span>AI 답변 피드백 분석 중...</span>
+                                            ) : (
+                                                <>
+                                                    <Icon name="send" className="w-4 h-4" />
+                                                    <span>답변 제출 및 AI 평가 받기</span>
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
+
+                                    {/* History of Answer Feedbacks */}
+                                    {qaHistory.length > 0 && (
+                                        <div className="pt-4 border-t border-slate-800 space-y-3">
+                                            <h4 className="text-xs font-semibold text-slate-400">연습한 답변 피드백 기록</h4>
+                                            <div className="space-y-3 max-h-48 overflow-y-auto custom-scrollbar">
+                                                {qaHistory.map((item, i) => (
+                                                    <div key={i} className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 text-xs space-y-1">
+                                                        <p className="font-bold text-indigo-300">Q: {item.question}</p>
+                                                        <p className="text-slate-300">A: {item.userAnswer}</p>
+                                                        <div className="bg-indigo-950/40 p-2 rounded border border-indigo-800/40 text-indigo-200 text-[11px] mt-1">
+                                                            {item.feedback}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Footer */}
+                    <footer className="mt-12 py-6 border-t border-slate-800 text-center text-xs text-slate-500">
+                        <p>AI 발표 코치 웹앱 • Canva Presentation Recording & Gemini 3 Flash / TTS Multimodal Studio</p>
+                    </footer>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
