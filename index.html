@@ -201,88 +201,138 @@
 따라서 이 작품은 단순한 풍경화가 아닌, 작가의 영혼을 담은 서사시라고 할 수 있습니다. 
 음... 이상으로 큐레이팅을 마치겠습니다. 경청해 주셔서 감사합니다!`;
 
-        // Extract & compress audio track from large video files directly inside browser
-        async function extractAudioFromVideo(file, onProgress) {
-            if (onProgress) onProgress("대용량 동영상에서 발표 음성 추출 준비 중...");
-            
-            const arrayBuffer = await file.arrayBuffer();
-            if (onProgress) onProgress("음성 데이터 디코딩 중 (잠시만 기다려주세요)...");
+        // Gemini Files API: large files are uploaded separately from the JSON prompt.
+        // This avoids putting a large video into base64/inlineData.
+        const GEMINI_UPLOAD_BASE = "https://generativelanguage.googleapis.com/upload/v1beta/files";
+        const GEMINI_FILES_BASE = "https://generativelanguage.googleapis.com/v1beta/files";
+        const MAX_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB chunks for stable tablet uploads.
 
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        async function uploadToGeminiFiles(file, apiKey, onProgress) {
+            const total = file.size;
 
-            if (onProgress) onProgress("음성 데이터 16kHz 초경량 WAV로 압축 변환 중...");
+            if (onProgress) onProgress(`Gemini Files API 업로드 준비 중... (${formatBytes(total)})`);
 
-            // Convert AudioBuffer to mono 16kHz WAV format
-            const pcm16Data = convertToMonoPcm16(audioBuffer);
-            const wavBlob = pcmToWav(pcm16Data, 16000);
-            
-            audioCtx.close();
-            return wavBlob;
-        }
+            // 1) Start resumable upload session.
+            const startResponse = await fetch(`${GEMINI_UPLOAD_BASE}?key=${encodeURIComponent(apiKey)}`, {
+                method: "POST",
+                headers: {
+                    "X-Goog-Upload-Protocol": "resumable",
+                    "X-Goog-Upload-Command": "start",
+                    "X-Goog-Upload-Header-Content-Length": String(total),
+                    "X-Goog-Upload-Header-Content-Type": file.type || "application/octet-stream",
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    file: {
+                        display_name: file.name.slice(0, 500)
+                    }
+                })
+            });
 
-        function convertToMonoPcm16(audioBuffer) {
-            const rawData = audioBuffer.getChannelData(0); // Use 1st channel
-            const pcm16 = new Int16Array(rawData.length);
-            for (let i = 0; i < rawData.length; i++) {
-                const s = Math.max(-1, Math.min(1, rawData[i]));
-                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            if (!startResponse.ok) {
+                const msg = await startResponse.text();
+                throw new Error(`Gemini 업로드 세션 생성 실패 (${startResponse.status}): ${msg.slice(0, 200)}`);
             }
-            return pcm16;
-        }
 
-        function pcmToWav(pcm16Data, sampleRate) {
-            const buffer = new ArrayBuffer(44 + pcm16Data.length * 2);
-            const view = new DataView(buffer);
-            
-            function writeString(offset, string) {
-                for (let i = 0; i < string.length; i++) {
-                    view.setUint8(offset + i, string.charCodeAt(i));
+            const uploadUrl =
+                startResponse.headers.get("X-Goog-Upload-URL") ||
+                startResponse.headers.get("x-goog-upload-url");
+
+            if (!uploadUrl) {
+                throw new Error("Gemini 업로드 주소를 받지 못했습니다. 브라우저의 네트워크 정책(CORS)을 확인해 주세요.");
+            }
+
+            // 2) Upload in resumable chunks. The video never becomes base64.
+            let offset = 0;
+            while (offset < total) {
+                const end = Math.min(offset + MAX_CHUNK_SIZE, total);
+                const chunk = file.slice(offset, end);
+
+                const chunkResponse = await fetch(uploadUrl, {
+                    method: "PUT",
+                    headers: {
+                        "Content-Length": String(chunk.size),
+                        "X-Goog-Upload-Offset": String(offset),
+                        "X-Goog-Upload-Command": end >= total ? "upload, finalize" : "upload"
+                    },
+                    body: chunk
+                });
+
+                if (!chunkResponse.ok) {
+                    const msg = await chunkResponse.text();
+                    throw new Error(`파일 업로드 실패 (${chunkResponse.status}): ${msg.slice(0, 200)}`);
+                }
+
+                offset = end;
+                const percent = Math.round((offset / total) * 100);
+                if (onProgress) {
+                    onProgress(`Gemini에 영상 업로드 중... ${percent}% (${formatBytes(offset)} / ${formatBytes(total)})`);
                 }
             }
-            
-            writeString(0, 'RIFF');
-            view.setUint32(4, 36 + pcm16Data.length * 2, true);
-            writeString(8, 'WAVE');
-            writeString(12, 'fmt ');
-            view.setUint32(16, 16, true);
-            view.setUint16(20, 1, true);
-            view.setUint16(22, 1, true);
-            view.setUint32(24, sampleRate, true);
-            view.setUint32(28, sampleRate * 2, true);
-            view.setUint16(32, 2, true);
-            view.setUint16(34, 16, true);
-            writeString(36, 'data');
-            view.setUint32(40, pcm16Data.length * 2, true);
-            
-            const offset = 44;
-            for (let i = 0; i < pcm16Data.length; i++) {
-                view.setInt16(offset + (i * 2), pcm16Data[i], true);
+
+            const fileInfo = await chunkResponseJsonSafe(chunkResponse);
+            const uploadedFile = fileInfo.file || fileInfo;
+
+            if (!uploadedFile.name) {
+                throw new Error("Gemini가 업로드된 파일 정보를 반환하지 않았습니다.");
             }
-            
-            return new Blob([buffer], { type: 'audio/wav' });
+
+            return uploadedFile;
         }
 
-        function blobToBase64(blob) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                    const base64String = reader.result.split(',')[1];
-                    resolve(base64String);
-                };
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
-            });
+        async function chunkResponseJsonSafe(response) {
+            const contentType = response.headers.get("content-type") || "";
+            if (contentType.includes("application/json")) {
+                return await response.json();
+            }
+            const text = await response.text();
+            try {
+                return JSON.parse(text);
+            } catch {
+                return {};
+            }
         }
 
-        function base64ToArrayBuffer(base64) {
-            const binaryString = window.atob(base64);
-            const len = binaryString.length;
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
+        function formatBytes(bytes) {
+            if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+            const units = ["B", "KB", "MB", "GB"];
+            const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+            return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+        }
+
+        async function waitForGeminiFileActive(fileName, apiKey, onProgress) {
+            const cleanName = fileName.startsWith("files/") ? fileName.slice(6) : fileName;
+
+            for (let attempt = 0; attempt < 120; attempt++) {
+                const response = await fetch(
+                    `${GEMINI_FILES_BASE}/${encodeURIComponent(cleanName)}?key=${encodeURIComponent(apiKey)}`
+                );
+
+                if (!response.ok) {
+                    const msg = await response.text();
+                    throw new Error(`업로드 파일 상태 확인 실패 (${response.status}): ${msg.slice(0, 200)}`);
+                }
+
+                const fileInfo = await response.json();
+                const state = fileInfo.state || "ACTIVE";
+
+                if (state === "ACTIVE") {
+                    if (onProgress) onProgress("영상 처리가 완료되었습니다. Gemini가 발표를 분석하고 있습니다...");
+                    return fileInfo;
+                }
+
+                if (state === "FAILED") {
+                    throw new Error("Gemini가 영상을 처리하지 못했습니다. MP4 또는 MOV 형식으로 다시 녹화해 주세요.");
+                }
+
+                if (onProgress) {
+                    onProgress(`Gemini가 영상 처리 중입니다... (${state})`);
+                }
+
+                await new Promise(resolve => setTimeout(resolve, 2500));
             }
-            return bytes.buffer;
+
+            throw new Error("Gemini 영상 처리 시간이 너무 오래 걸렸습니다. 영상 길이를 줄여 다시 시도해 주세요.");
         }
 
         function App() {
@@ -394,7 +444,7 @@
                     return;
                 }
                 if (inputType === 'file' && !selectedFile) {
-                    showToast("태블릿 녹화(동영상/음성) 파일을 선택해주세요.");
+                    showToast("태블릿 화면녹화 파일을 선택해주세요.");
                     return;
                 }
 
@@ -402,88 +452,239 @@
                 if (!activeKey) {
                     setTempApiKey('');
                     setShowApiKeyModal(true);
-                    showToast("분석을 시작하려면 먼저 무료 Gemini API 키를 입력해 주세요.");
+                    showToast("분석을 시작하려면 먼저 Gemini API 키를 입력해 주세요.");
                     return;
                 }
 
                 setIsAnalyzing(true);
 
                 try {
-                    let sendingBase64 = '';
-                    let sendingMimeType = '';
+                    setAnalysisProgress("발표 분석 준비 중...");
 
-                    if (inputType === 'file') {
-                        if (selectedFile.type.startsWith('video/') || selectedFile.size > 10 * 1024 * 1024) {
-                            try {
-                                const wavBlob = await extractAudioFromVideo(selectedFile, (statusMsg) => setAnalysisProgress(statusMsg));
-                                sendingBase64 = await blobToBase64(wavBlob);
-                                sendingMimeType = 'audio/wav';
-                            } catch (extractionErr) {
-                                console.warn("In-browser extraction failed, attempting direct upload:", extractionErr);
-                                setAnalysisProgress("파일 데이터 변환 중...");
-                                sendingBase64 = await blobToBase64(selectedFile);
-                                sendingMimeType = selectedFile.type || 'audio/mp3';
-                            }
-                        } else {
-                            setAnalysisProgress("음성 파일 읽는 중...");
-                            sendingBase64 = await blobToBase64(selectedFile);
-                            sendingMimeType = selectedFile.type || 'audio/mp3';
-                        }
-                    }
+                    const systemInstruction = `당신은 대한민국 중학교 국어 수업의 발표 코치입니다.
 
-                    setAnalysisProgress("제미나이 AI가 '말하기' 수행평가 채점 기준 적용 중...");
+[분석 목적]
+학생의 발표를 점수로 단순 판정하는 것이 아니라, 다음 발표에서 실제로 개선할 수 있도록 구체적이고 행동 중심의 피드백을 제공합니다.
 
-                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${activeKey}`;
+[중요]
+1. 모든 학생은 '미술관/박물관 큐레이터' 컨셉으로 발표합니다. 큐레이터 컨셉 자체를 추천하거나 평가하지 마세요.
+2. 영상에서 실제로 확인할 수 있는 내용만 근거로 평가하세요.
+3. 화면 녹화 영상에서는 슬라이드의 내용, 슬라이드 전환, 발표자의 음성 등을 함께 분석하세요.
+4. 발표자의 얼굴이나 신체가 화면에 보이지 않으면 시선·표정·자세를 추측하지 마세요.
+5. 음성만으로 성량이나 시선 등을 확실히 판단하기 어려운 경우 '확인하기 어려움'이라고 표시하세요.
+6. 습관어는 가능한 한 실제 음성을 근거로 세되, AI의 자동 음성 인식 오차 가능성을 고려하여 '약' 또는 '정확하지 않을 수 있음'을 함께 밝혀도 됩니다.
+7. 학생의 약점을 나열하기보다 가장 개선 효과가 큰 3가지를 우선 제시하세요.
+8. 학생이 이해하기 쉬운 중학생 수준의 표현을 사용하세요.
+9. '못했다', '부족하다'보다는 '더 좋아질 수 있다', '이렇게 해 보면 좋다'를 사용하세요.
 
-                    const systemInstruction = `당신은 대한민국 학교 수행평가 전문 피드백 AI 코치입니다.
-[중요 조건]
-1. 모든 학생은 '미술관/박물관 큐레이터' 컨셉으로 동일하게 발표합니다. 따라서 "큐레이터 컨셉을 추천한다"거나 "큐레이터처럼 하라"는 식의 컨셉에 대한 지적/칭찬/언급은 피드백에서 완전히 제외하세요.
-2. 수행평가 '말하기' 채점 기준에 따라 실용적이고 세부적인 피드백을 제공해야 합니다.
+대상 학년: ${gradeLevel}
+발표 목적: ${purpose}
 
-대상 학년: ${gradeLevel}, 발표 목적: ${purpose}.
+[평가 영역]
+- 내용의 적절성 및 구성력
+- 발음, 성량, 속도 및 어조
+- 전달의 명확성
+- 발표 자료의 적절한 활용
+- 청중을 고려한 발표 태도
+- 제한 시간 준수 및 습관어/추임새 관리
 
-다음 JSON 구조에 맞춰 엄격하게 결과를 생성하십시오:
-1. overallScore (0~100)
-2. scores: { structure (내용 구성), delivery (발음/성량/어조), clarity (전달력/명확성), engagement (청중 태도/시선) }
-3. summary: 말하기 수행평가 전체 한줄평 및 종합 소평
-4. speakingCriteria: 말하기 수행평가 4대 필수 평가 항목별 상세 평가 배열
-   [
-     { criteriaName: "발음, 성량 및 속도", score: "상/중/하 또는 점수", feedback: "상세 피드백" },
-     { criteriaName: "시선 처리 및 발표 태도", score: "상/중/하 또는 점수", feedback: "상세 피드백" },
-     { criteriaName: "내용의 적절성 및 구성력", score: "상/중/하 또는 점수", feedback: "상세 피드백" },
-     { criteriaName: "제한시간 및 습관어/추임새 관리", score: "상/중/하 또는 점수", feedback: "상세 피드백" }
-   ]
-5. strengths: 말하기 수행평가 기준 잘한 점 3가지 (배열)
-6. improvements: 말하기 수행평가 감점 방지를 위한 보완점 3가지 (배열)
-7. fillerWordCount: { eoh: '어' 횟수, eum: '음' 횟수, total: 전체 습관어 횟수 }
-8. scriptImprovements: 대본 전달력 향상 교정 목록 [{ original: "기존 문장", suggested: "교정 문장", reason: "교정 이유" }]
-9. expectedQuestions: 예상 청중/교사 질의응답 3개 [{ id: 1, question: "질문 내용", tip: "답변 팁", sampleAnswer: "모범 답변" }]
-10. coachVoiceScript: 학생에게 다정하게 말해줄 200자 이내의 말하기 코치 음성 피드백`;
+[결과 형식]
+반드시 아래 JSON 구조를 따르세요.
 
-                    let contents = [];
+1. overallScore: 0~100 정수
+2. scores:
+   - structure: 내용 구성 점수 0~100
+   - delivery: 발음/성량/속도/어조 점수 0~100
+   - clarity: 전달력/명확성 점수 0~100
+   - engagement: 청중 고려 및 발표 태도 점수 0~100
+   - materialUse: 발표 자료 활용 점수 0~100
+3. summary: 전체 발표를 2~3문장으로 요약
+4. speakingCriteria: 다음 5개 항목을 각각 평가
+   - 발음, 성량 및 속도
+   - 시선 처리 및 발표 태도
+   - 내용의 적절성 및 구성력
+   - 발표 자료 활용
+   - 제한시간 및 습관어/추임새 관리
+   각 항목에는 criteriaName, score, feedback을 포함
+5. strengths: 실제 영상에서 확인된 잘한 점 3개
+6. improvements: 개선점 3개. 각각 구체적인 행동 방법을 포함
+7. fillerWordCount:
+   - eoh: '어' 추정 횟수
+   - eum: '음' 추정 횟수
+   - total: 습관어 추정 총횟수
+8. scriptImprovements: 발표에서 개선하면 좋은 표현을 최대 5개
+   - original
+   - suggested
+   - reason
+9. expectedQuestions: 발표 내용에 근거한 예상 질문 3개
+   - id
+   - question
+   - tip
+   - sampleAnswer
+10. coachVoiceScript: 학생에게 직접 말하는 따뜻한 코칭 200자 이내
+`;
 
                     if (inputType === 'text') {
-                        contents = [{
-                            role: 'user',
-                            parts: [{ text: `다음은 학생의 말하기 수행평가 제출 대본입니다. 말하기 평가 기준에 맞춰 피드백해 주세요:\n\n${scriptText}` }]
-                        }];
-                    } else {
-                        contents = [{
-                            role: 'user',
+                        setAnalysisProgress("제미나이 AI가 발표 대본을 분석하고 있습니다...");
+
+                        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(activeKey)}`;
+
+                        const payload = {
+                            contents: [{
+                                role: 'user',
+                                parts: [{
+                                    text: `다음은 학생의 말하기 수행평가 제출 대본입니다. 위 평가 기준에 따라 피드백해 주세요.\n\n${scriptText}`
+                                }]
+                            }],
+                            systemInstruction: { parts: [{ text: systemInstruction }] },
+                            generationConfig: {
+                                responseMimeType: "application/json",
+                                responseSchema: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        overallScore: { type: "NUMBER" },
+                                        scores: {
+                                            type: "OBJECT",
+                                            properties: {
+                                                structure: { type: "NUMBER" },
+                                                delivery: { type: "NUMBER" },
+                                                clarity: { type: "NUMBER" },
+                                                engagement: { type: "NUMBER" },
+                                                materialUse: { type: "NUMBER" }
+                                            },
+                                            required: ["structure", "delivery", "clarity", "engagement", "materialUse"]
+                                        },
+                                        summary: { type: "STRING" },
+                                        speakingCriteria: {
+                                            type: "ARRAY",
+                                            items: {
+                                                type: "OBJECT",
+                                                properties: {
+                                                    criteriaName: { type: "STRING" },
+                                                    score: { type: "STRING" },
+                                                    feedback: { type: "STRING" }
+                                                },
+                                                required: ["criteriaName", "score", "feedback"]
+                                            }
+                                        },
+                                        strengths: { type: "ARRAY", items: { type: "STRING" } },
+                                        improvements: { type: "ARRAY", items: { type: "STRING" } },
+                                        fillerWordCount: {
+                                            type: "OBJECT",
+                                            properties: {
+                                                eoh: { type: "NUMBER" },
+                                                eum: { type: "NUMBER" },
+                                                total: { type: "NUMBER" }
+                                            },
+                                            required: ["eoh", "eum", "total"]
+                                        },
+                                        scriptImprovements: {
+                                            type: "ARRAY",
+                                            items: {
+                                                type: "OBJECT",
+                                                properties: {
+                                                    original: { type: "STRING" },
+                                                    suggested: { type: "STRING" },
+                                                    reason: { type: "STRING" }
+                                                },
+                                                required: ["original", "suggested", "reason"]
+                                            }
+                                        },
+                                        expectedQuestions: {
+                                            type: "ARRAY",
+                                            items: {
+                                                type: "OBJECT",
+                                                properties: {
+                                                    id: { type: "NUMBER" },
+                                                    question: { type: "STRING" },
+                                                    tip: { type: "STRING" },
+                                                    sampleAnswer: { type: "STRING" }
+                                                },
+                                                required: ["id", "question", "tip", "sampleAnswer"]
+                                            }
+                                        },
+                                        coachVoiceScript: { type: "STRING" }
+                                    },
+                                    required: ["overallScore", "scores", "summary", "speakingCriteria", "strengths", "improvements", "fillerWordCount", "scriptImprovements", "expectedQuestions", "coachVoiceScript"]
+                                }
+                            }
+                        };
+
+                        const response = await fetch(apiUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (!response.ok) {
+                            const errText = await response.text();
+                            if ([400, 401, 403].includes(response.status)) {
+                                setShowApiKeyModal(true);
+                                throw new Error(`API 키 인증 실패 (${response.status}).`);
+                            }
+                            throw new Error(`API 오류 (${response.status}): ${errText.slice(0, 200)}`);
+                        }
+
+                        const result = await response.json();
+                        const parsedJson = JSON.parse(result.candidates[0].content.parts[0].text);
+                        setReportData(parsedJson);
+                        setActiveTab('report');
+                        showToast("말하기 수행평가 피드백 생성이 완료되었습니다!");
+
+                        if (parsedJson.coachVoiceScript) {
+                            generateCoachAudio(parsedJson.coachVoiceScript, activeKey);
+                        }
+                        return;
+                    }
+
+                    // IMPORTANT: For video/audio files, do NOT convert the file to base64.
+                    // Upload through Gemini Files API and then reference the uploaded URI.
+                    setAnalysisProgress(`원본 파일을 Gemini Files API로 안전하게 업로드합니다... (${formatBytes(selectedFile.size)})`);
+
+                    const uploaded = await uploadToGeminiFiles(
+                        selectedFile,
+                        activeKey,
+                        (msg) => setAnalysisProgress(msg)
+                    );
+
+                    const activeFile = await waitForGeminiFileActive(
+                        uploaded.name,
+                        activeKey,
+                        (msg) => setAnalysisProgress(msg)
+                    );
+
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(activeKey)}`;
+
+                    const payload = {
+                        contents: [{
+                            role: "user",
                             parts: [
-                                { text: "학생의 태블릿 말하기 수행평가 녹화 파일에서 추출한 발표 음성입니다. 발음, 속도, 습관어, 전달력 등 말하기 채점 기준에 따라 분석해 주세요." },
                                 {
-                                    inlineData: {
-                                        mimeType: sendingMimeType,
-                                        data: sendingBase64
+                                    text: `이 영상은 중학교 국어 수업의 발표 연습 영상입니다.
+
+화면 녹화 영상의 슬라이드와 발표 음성을 함께 분석하세요.
+발표자가 실제로 말한 내용과 화면에 표시된 자료를 연결하여 평가하세요.
+
+특히 다음을 확인하세요.
+- 발표 내용의 흐름과 구성
+- 슬라이드와 발표 내용의 연결
+- 슬라이드 글을 그대로 읽는지 여부
+- 이미지/자료/표/그래프 등을 설명에 활용하는지
+- 발음, 속도, 쉼, 습관어
+- 발표의 핵심 내용이 명확하게 전달되는지
+- 영상에서 확인 가능한 발표 태도
+- 발표 시간과 마무리
+
+위의 시스템 지침에 따라 JSON으로만 결과를 작성하세요.`
+                                },
+                                {
+                                    fileData: {
+                                        mimeType: activeFile.mimeType || selectedFile.type || "video/mp4",
+                                        fileUri: activeFile.uri
                                     }
                                 }
                             ]
-                        }];
-                    }
-
-                    const payload = {
-                        contents: contents,
+                        }],
                         systemInstruction: { parts: [{ text: systemInstruction }] },
                         generationConfig: {
                             responseMimeType: "application/json",
@@ -497,9 +698,10 @@
                                             structure: { type: "NUMBER" },
                                             delivery: { type: "NUMBER" },
                                             clarity: { type: "NUMBER" },
-                                            engagement: { type: "NUMBER" }
+                                            engagement: { type: "NUMBER" },
+                                            materialUse: { type: "NUMBER" }
                                         },
-                                        required: ["structure", "delivery", "clarity", "engagement"]
+                                        required: ["structure", "delivery", "clarity", "engagement", "materialUse"]
                                     },
                                     summary: { type: "STRING" },
                                     speakingCriteria: {
@@ -557,6 +759,8 @@
                         }
                     };
 
+                    setAnalysisProgress("Gemini가 화면과 음성을 함께 분석하고 있습니다...");
+
                     const response = await fetch(apiUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -565,19 +769,27 @@
 
                     if (!response.ok) {
                         const errText = await response.text();
-                        if (response.status === 400 || response.status === 403 || response.status === 401) {
+                        if ([400, 401, 403].includes(response.status)) {
                             setShowApiKeyModal(true);
-                            throw new Error(`API 키 인증 실패 (${response.status}). 올바른 Gemini API 키인지 확인해 주세요.`);
+                            throw new Error(`API 키 인증 실패 (${response.status}).`);
                         }
-                        throw new Error(`API 오류 (${response.status}): ${errText.slice(0, 100)}`);
+                        throw new Error(`Gemini 분석 오류 (${response.status}): ${errText.slice(0, 250)}`);
                     }
 
                     const result = await response.json();
-                    const parsedJson = JSON.parse(result.candidates[0].content.parts[0].text);
+                    const textResult = result?.candidates?.[0]?.content?.parts
+                        ?.filter(p => p.text)
+                        ?.map(p => p.text)
+                        ?.join("");
 
+                    if (!textResult) {
+                        throw new Error("Gemini에서 분석 결과를 받지 못했습니다.");
+                    }
+
+                    const parsedJson = JSON.parse(textResult);
                     setReportData(parsedJson);
                     setActiveTab('report');
-                    showToast("말하기 수행평가 피드백 생성이 완료되었습니다!");
+                    showToast("화면과 음성을 함께 분석한 발표 피드백이 완성되었습니다!");
 
                     if (parsedJson.coachVoiceScript) {
                         generateCoachAudio(parsedJson.coachVoiceScript, activeKey);
@@ -585,7 +797,7 @@
 
                 } catch (error) {
                     console.error("Analysis error:", error);
-                    showToast(error.message || "분석 중 오류가 발생했습니다. API 키나 파일 크기를 확인해 주세요.");
+                    showToast(error.message || "분석 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
                 } finally {
                     setIsAnalyzing(false);
                     setAnalysisProgress('');
@@ -721,7 +933,7 @@
                             </div>
                             <div>
                                 <h1 className="text-2xl font-bold gradient-text">AI 말하기 수행평가 코치</h1>
-                                <p className="text-xs text-slate-400">태블릿 화면녹화 대용량 자동지원 & 말하기 채점기준 맞춤 피드백</p>
+                                <p className="text-xs text-slate-400">태블릿 화면녹화 대용량 업로드 & Gemini 멀티모달 발표 피드백</p>
                             </div>
                         </div>
 
@@ -854,10 +1066,10 @@
                                     <div className="pt-4 border-t border-slate-800">
                                         <div className="bg-indigo-950/40 p-4 rounded-xl border border-indigo-800/40 text-xs text-indigo-200 leading-relaxed space-y-2">
                                             <p className="font-semibold flex items-center gap-1 text-indigo-300">
-                                                <Icon name="zap" className="w-4 h-4 text-amber-400" /> 대용량 태블릿 화면녹화 자동지원
+                                                <Icon name="zap" className="w-4 h-4 text-amber-400" /> 대용량 태블릿 화면녹화 지원
                                             </p>
-                                            <p>• 태블릿 화면녹화 파일(100MB+)을 업로드하면 웹앱이 <strong>브라우저에서 2초 만에 발표 음성만 자동 추출</strong>합니다.</p>
-                                            <p>• 용량 제한 없이 100% 오류 없이 빠른 피드백을 받으실 수 있습니다!</p>
+                                            <p>• 큰 동영상은 <strong>Gemini Files API에 분할 전송</strong>하여 base64 변환 없이 처리합니다.</p>
+                                            <p>• 업로드 중 진행률을 표시하고, 영상과 음성을 함께 분석합니다. (Gemini API의 계정별 용량·사용량 제한은 적용됩니다.)</p>
                                         </div>
                                     </div>
 
@@ -884,7 +1096,7 @@
                                                 onClick={() => setInputType('file')}
                                                 className={`flex items-center gap-2 pb-2 text-sm font-medium border-b-2 transition ${inputType === 'file' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400'}`}>
                                                 <Icon name="video" className="w-4 h-4" />
-                                                태블릿 화면녹화 / 음성 파일 업로드 (자동 압축 지원)
+                                                태블릿 화면녹화 / 음성 파일 업로드 (대용량 Files API 지원)
                                             </button>
                                         </div>
 
@@ -1253,7 +1465,7 @@
 
                     {/* Footer */}
                     <footer className="mt-12 py-6 border-t border-slate-800 text-center text-xs text-slate-500">
-                        <p>AI 발표 코치 웹앱 • Auto In-Browser Audio Extraction & Gemini 3 Flash / TTS Multimodal Studio</p>
+                        <p>AI 발표 코치 웹앱 • Gemini Files API 대용량 업로드 & 멀티모달 발표 분석</p>
                     </footer>
                 </div>
             );
