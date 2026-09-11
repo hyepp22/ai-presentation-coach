@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 발표 코치 - Canva & Gemini 연동 발표 피드백 시스템</title>
+    <title>AI 발표 코치 - 태블릿 화면녹화 & Gemini 연동 발표 피드백 시스템</title>
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -286,7 +286,7 @@
 
             const showToast = (msg) => {
                 setToastMessage(msg);
-                setTimeout(() => setToastMessage(''), 3000);
+                setTimeout(() => setToastMessage(''), 4000);
             };
 
             // Image Report Download
@@ -320,13 +320,18 @@
                 }
             };
 
-            // Handle File Select (Canva video/audio recording - Raised limit to 100MB)
+            // Handle File Select (Gemini API direct inline Base64 limit is ~15MB)
             const handleFileChange = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
 
-                if (file.size > 100 * 1024 * 1024) {
-                    showToast("파일 크기가 100MB를 초과합니다. 100MB 이하의 파일로 시도해주세요.");
+                const MAX_INLINE_SIZE = 15 * 1024 * 1024; // 15MB
+
+                if (file.size > MAX_INLINE_SIZE) {
+                    showToast(`파일 크기(${(file.size / (1024 * 1024)).toFixed(1)}MB)가 실시간 API 제한(15MB)을 초과했습니다. MP3 음성 파일로 변환하거나 텍스트 입력 방식을 사용해 주세요.`);
+                    setSelectedFile(null);
+                    setFileBase64(null);
+                    e.target.value = '';
                     return;
                 }
 
@@ -488,29 +493,39 @@
                     };
 
                     let response;
-                    let retries = 3;
+                    let retries = 2;
                     let delay = 1000;
 
-                    while (retries > 0) {
+                    while (retries >= 0) {
                         try {
                             response = await fetch(apiUrl, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify(payload)
                             });
+
                             if (response.ok) break;
+
+                            if (response.status === 413) {
+                                throw new Error("파일 용량이 Gemini API 실시간 전송 제한(15MB)을 초과했습니다. MP3 음성 파일로 변환 후 업로드해 주세요.");
+                            } else if (response.status === 400) {
+                                throw new Error("지원되지 않는 미디어 형식이거나 전송 용량이 초과되었습니다.");
+                            }
                         } catch (err) {
+                            if (err.message.includes("15MB") || err.message.includes("지원되지 않는")) {
+                                throw err;
+                            }
                             console.log("Retry attempt due to fetch error...", err);
                         }
                         retries--;
-                        if (retries > 0) {
+                        if (retries >= 0) {
                             await new Promise(r => setTimeout(r, delay));
                             delay *= 2;
                         }
                     }
 
                     if (!response || !response.ok) {
-                        throw new Error("Gemini API 분석 요청 실패");
+                        throw new Error("Gemini API 전송에 실패했습니다. 파일 크기가 크다면 MP3 음성 파일 또는 텍스트 입력 방식을 이용해 주세요.");
                     }
 
                     const result = await response.json();
@@ -526,7 +541,7 @@
 
                 } catch (error) {
                     console.error("Analysis error:", error);
-                    showToast("분석 중 오류가 발생했습니다. 파일 크기가 크다면 텍스트 입력 방식을 권장합니다.");
+                    showToast(error.message || "분석 중 오류가 발생했습니다.");
                 } finally {
                     setIsAnalyzing(false);
                     setAnalysisProgress('');
@@ -642,20 +657,6 @@
                 }
             };
 
-            const copyToClipboard = (text) => {
-                const textarea = document.createElement('textarea');
-                textarea.value = text;
-                document.body.appendChild(textarea);
-                textarea.select();
-                try {
-                    document.execCommand('copy');
-                    showToast("클립보드에 복사되었습니다!");
-                } catch (err) {
-                    showToast("복사 실패");
-                }
-                document.body.removeChild(textarea);
-            };
-
             return (
                 <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col min-h-screen">
                     {/* Header */}
@@ -740,11 +741,13 @@
                                     </div>
 
                                     <div className="pt-4 border-t border-slate-800">
-                                        <div className="bg-indigo-950/40 p-4 rounded-xl border border-indigo-800/40 text-xs text-indigo-200 leading-relaxed">
-                                            <p className="font-semibold mb-1 flex items-center gap-1 text-indigo-300">
-                                                <Icon name="sparkles" className="w-4 h-4" /> 캔바(Canva) 활용 팁
+                                        <div className="bg-indigo-950/40 p-4 rounded-xl border border-indigo-800/40 text-xs text-indigo-200 leading-relaxed space-y-2">
+                                            <p className="font-semibold flex items-center gap-1 text-indigo-300">
+                                                <Icon name="sparkles" className="w-4 h-4" /> 태블릿 화면녹화 파일 가이드
                                             </p>
-                                            캔바 상단 [공유] ➔ [자세히 보기] ➔ [프레젠테이션 및 녹화] 기능을 사용하면 학생이 슬라이드를 넘기며 말하는 발표 동영상(MP4)을 쉽게 추출할 수 있습니다.
+                                            <p>• 아이패드/갤럭시탭 화면녹화 동영상은 고화질이라 파일 용량(50MB~150MB)이 매우 큽니다.</p>
+                                            <p>• 웹사이트 'MP4 to MP3 변환기'로 <strong>음성 파일(MP3)만 추출</strong>해 올리시면 가장 빠르고 안정적으로 분석됩니다.</p>
+                                            <p>• 또는 대본 텍스트를 복사해 <strong>'발표 대본 직접 입력'</strong> 탭에 붙여넣으시면 즉시 정밀 피드백을 받으실 수 있습니다.</p>
                                         </div>
                                     </div>
 
@@ -765,13 +768,13 @@
                                                 onClick={() => setInputType('text')}
                                                 className={`flex items-center gap-2 pb-2 text-sm font-medium border-b-2 transition ${inputType === 'text' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400'}`}>
                                                 <Icon name="align-left" className="w-4 h-4" />
-                                                발표 대본 직접 입력
+                                                발표 대본 직접 입력 (추천)
                                             </button>
                                             <button 
                                                 onClick={() => setInputType('file')}
                                                 className={`flex items-center gap-2 pb-2 text-sm font-medium border-b-2 transition ${inputType === 'file' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-slate-400'}`}>
                                                 <Icon name="video" className="w-4 h-4" />
-                                                캔바 녹화 파일 업로드 (MP4 / MP3)
+                                                태블릿 녹화 / 음성 파일 업로드 (MP3 / 15MB 이하)
                                             </button>
                                         </div>
 
@@ -789,8 +792,11 @@
                                         ) : (
                                             <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-700 hover:border-indigo-500 rounded-2xl p-8 transition bg-slate-900/50 my-4">
                                                 <Icon name="file-video" className="w-12 h-12 text-indigo-400 mb-3" />
-                                                <p className="text-sm font-medium mb-1">캔바 녹화 영상 또는 음성 파일 제출</p>
-                                                <p className="text-xs text-slate-500 mb-4">MP4, WebM, MP3, WAV 지원 (최대 100MB)</p>
+                                                <p className="text-sm font-medium mb-1">태블릿 화면녹화 또는 음성 파일 제출</p>
+                                                <p className="text-xs text-slate-400 mb-4 text-center">
+                                                    실시간 API 특성상 <strong className="text-indigo-300">최대 15MB 이하</strong> 파일만 지원됩니다.<br/>
+                                                    (태블릿 동영상 용량이 크면 MP3 오디오로 변환하여 업로드해 주세요)
+                                                </p>
 
                                                 <input 
                                                     type="file" 
@@ -1137,7 +1143,7 @@
 
                     {/* Footer */}
                     <footer className="mt-12 py-6 border-t border-slate-800 text-center text-xs text-slate-500">
-                        <p>AI 발표 코치 웹앱 • Canva Presentation Recording & Gemini 3 Flash / TTS Multimodal Studio</p>
+                        <p>AI 발표 코치 웹앱 • Tablet Recording & Gemini 3 Flash / TTS Multimodal Studio</p>
                     </footer>
                 </div>
             );
