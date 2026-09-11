@@ -174,6 +174,11 @@
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="3" y2="15"/>
                     </svg>
                 ),
+                'key': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3"/>
+                    </svg>
+                ),
                 'award': (
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
                         <circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>
@@ -289,11 +294,29 @@
             const [gradeLevel, setGradeLevel] = useState('고등학생');
             const [purpose, setPurpose] = useState('수행평가 발표');
 
+            // API Key State & Management
+            const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+            const [tempApiKey, setTempApiKey] = useState('');
+            const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+
             // Analysis State
             const [isAnalyzing, setIsAnalyzing] = useState(false);
             const [analysisProgress, setAnalysisProgress] = useState('');
             const [reportData, setReportData] = useState(null);
             const [isDownloading, setIsDownloading] = useState(false);
+
+            // Save API Key to localStorage
+            const saveApiKey = (key) => {
+                const trimmed = key.trim();
+                setUserApiKey(trimmed);
+                localStorage.setItem('gemini_api_key', trimmed);
+                setShowApiKeyModal(false);
+                if (trimmed) {
+                    showToast("Gemini API 키가 저장되었습니다.");
+                } else {
+                    showToast("API 키가 초기화되었습니다.");
+                }
+            };
 
             // Ref for report image capture
             const reportRef = useRef(null);
@@ -375,6 +398,14 @@
                     return;
                 }
 
+                const activeKey = userApiKey.trim();
+                if (!activeKey) {
+                    setTempApiKey('');
+                    setShowApiKeyModal(true);
+                    showToast("분석을 시작하려면 먼저 무료 Gemini API 키를 입력해 주세요.");
+                    return;
+                }
+
                 setIsAnalyzing(true);
 
                 try {
@@ -382,7 +413,6 @@
                     let sendingMimeType = '';
 
                     if (inputType === 'file') {
-                        // If selected file is video or large audio, extract & compress audio in browser
                         if (selectedFile.type.startsWith('video/') || selectedFile.size > 10 * 1024 * 1024) {
                             try {
                                 const wavBlob = await extractAudioFromVideo(selectedFile, (statusMsg) => setAnalysisProgress(statusMsg));
@@ -403,8 +433,7 @@
 
                     setAnalysisProgress("제미나이 AI가 '말하기' 수행평가 채점 기준 적용 중...");
 
-                    const apiKey = ""; // Canvas runtime environment automatically inserts API key
-                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${activeKey}`;
 
                     const systemInstruction = `당신은 대한민국 학교 수행평가 전문 피드백 AI 코치입니다.
 [중요 조건]
@@ -535,7 +564,12 @@
                     });
 
                     if (!response.ok) {
-                        throw new Error(`API 전송 상태 코드: ${response.status}`);
+                        const errText = await response.text();
+                        if (response.status === 400 || response.status === 403 || response.status === 401) {
+                            setShowApiKeyModal(true);
+                            throw new Error(`API 키 인증 실패 (${response.status}). 올바른 Gemini API 키인지 확인해 주세요.`);
+                        }
+                        throw new Error(`API 오류 (${response.status}): ${errText.slice(0, 100)}`);
                     }
 
                     const result = await response.json();
@@ -546,23 +580,25 @@
                     showToast("말하기 수행평가 피드백 생성이 완료되었습니다!");
 
                     if (parsedJson.coachVoiceScript) {
-                        generateCoachAudio(parsedJson.coachVoiceScript);
+                        generateCoachAudio(parsedJson.coachVoiceScript, activeKey);
                     }
 
                 } catch (error) {
                     console.error("Analysis error:", error);
-                    showToast("분석 중 오류가 발생했습니다. 대본 입력 방식을 사용하시거나 파일 크기를 확인해 주세요.");
+                    showToast(error.message || "분석 중 오류가 발생했습니다. API 키나 파일 크기를 확인해 주세요.");
                 } finally {
                     setIsAnalyzing(false);
                     setAnalysisProgress('');
                 }
             };
 
-            const generateCoachAudio = async (textToSpeak) => {
+            const generateCoachAudio = async (textToSpeak, activeKey) => {
                 setIsGeneratingSpeech(true);
                 try {
-                    const apiKey = "";
-                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+                    const apiKey = activeKey || userApiKey;
+                    if (!apiKey) return;
+
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
                     const payload = {
                         contents: [{
@@ -622,12 +658,18 @@
             const handleAnswerQuestion = async () => {
                 if (!userQaAnswer.trim() || !reportData) return;
 
+                const activeKey = userApiKey.trim();
+                if (!activeKey) {
+                    setShowApiKeyModal(true);
+                    showToast("질의응답 피드백을 받으려면 Gemini API 키를 입력해 주세요.");
+                    return;
+                }
+
                 setIsSubmittingQa(true);
                 const currentQ = reportData.expectedQuestions[activeQuestionIdx];
 
                 try {
-                    const apiKey = "";
-                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${activeKey}`;
 
                     const prompt = `학생 발표 예상 질문에 대한 답변 평가:
 질문: "${currentQ.question}"
@@ -646,6 +688,8 @@
                         body: JSON.stringify(payload)
                     });
 
+                    if (!response.ok) throw new Error("답변 분석 실패");
+
                     const result = await response.json();
                     const feedbackText = result.candidates[0].content.parts[0].text;
 
@@ -661,7 +705,7 @@
                     showToast("답변 피드백이 추가되었습니다.");
                 } catch (err) {
                     console.error("QA evaluation error:", err);
-                    showToast("피드백 생성 중 오류가 발생했습니다.");
+                    showToast("피드백 생성 중 오류가 발생했습니다. API 키를 확인해 주세요.");
                 } finally {
                     setIsSubmittingQa(false);
                 }
@@ -681,33 +725,90 @@
                             </div>
                         </div>
 
-                        {/* Navigation Tabs */}
-                        <div className="flex bg-slate-900/80 p-1.5 rounded-xl border border-slate-800 text-sm">
+                        {/* Navigation Tabs & API Key Button */}
+                        <div className="flex items-center gap-3 flex-wrap justify-center">
                             <button 
-                                onClick={() => setActiveTab('input')}
-                                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${activeTab === 'input' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
-                                <Icon name="upload" className="w-4 h-4" />
-                                발표 제출
+                                onClick={() => { setTempApiKey(userApiKey); setShowApiKeyModal(true); }}
+                                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition ${userApiKey ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20' : 'bg-amber-500/10 border-amber-500/30 text-amber-400 animate-pulse'}`}>
+                                <Icon name="key" className="w-4 h-4" />
+                                <span>{userApiKey ? 'API 키 설정됨' : 'API 키 입력 필요'}</span>
                             </button>
-                            <button 
-                                onClick={() => reportData ? setActiveTab('report') : showToast("먼저 발표 제출 후 분석을 진행해 주세요.")}
-                                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${activeTab === 'report' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
-                                <Icon name="bar-chart-3" className="w-4 h-4" />
-                                피드백 리포트
-                            </button>
-                            <button 
-                                onClick={() => reportData ? setActiveTab('qa') : showToast("분석 완료 후 사용 가능합니다.")}
-                                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${activeTab === 'qa' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
-                                <Icon name="message-square" className="w-4 h-4" />
-                                Q&A 모의 훈련
-                            </button>
+
+                            <div className="flex bg-slate-900/80 p-1.5 rounded-xl border border-slate-800 text-sm">
+                                <button 
+                                    onClick={() => setActiveTab('input')}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${activeTab === 'input' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
+                                    <Icon name="upload" className="w-4 h-4" />
+                                    발표 제출
+                                </button>
+                                <button 
+                                    onClick={() => reportData ? setActiveTab('report') : showToast("먼저 발표 제출 후 분석을 진행해 주세요.")}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${activeTab === 'report' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
+                                    <Icon name="bar-chart-3" className="w-4 h-4" />
+                                    피드백 리포트
+                                </button>
+                                <button 
+                                    onClick={() => reportData ? setActiveTab('qa') : showToast("분석 완료 후 사용 가능합니다.")}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${activeTab === 'qa' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>
+                                    <Icon name="message-square" className="w-4 h-4" />
+                                    Q&A 모의 훈련
+                                </button>
+                            </div>
                         </div>
                     </header>
 
+                    {/* API Key Modal */}
+                    {showApiKeyModal && (
+                        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+                            <div className="glass-card max-w-md w-full p-6 rounded-2xl border border-indigo-500/30 space-y-4 shadow-2xl">
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-base font-bold text-indigo-300 flex items-center gap-2">
+                                        <Icon name="key" className="w-5 h-5 text-indigo-400" />
+                                        Google Gemini API 키 설정
+                                    </h3>
+                                    <button onClick={() => setShowApiKeyModal(false)} className="text-slate-400 hover:text-white text-lg">✕</button>
+                                </div>
+                                <p className="text-xs text-slate-300 leading-relaxed">
+                                    Gemini AI를 이용하기 위해 무료 API 키가 필요합니다. 입력된 키는 외부 서버로 전송되지 않고 사용자의 브라우저에만 안전하게 저장됩니다.
+                                </p>
+                                <div>
+                                    <input 
+                                        type="password" 
+                                        value={tempApiKey}
+                                        onChange={(e) => setTempApiKey(e.target.value)}
+                                        placeholder="AIzaSy..."
+                                        className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-indigo-500"
+                                    />
+                                </div>
+                                <div className="flex justify-between items-center pt-2">
+                                    <a 
+                                        href="https://aistudio.google.com/app/apikey" 
+                                        target="_blank" 
+                                        rel="noopener noreferrer" 
+                                        className="text-xs text-indigo-400 hover:underline flex items-center gap-1">
+                                        🔗 무료 API 키 발급받기 (Google Studio)
+                                    </a>
+                                </div>
+                                <div className="flex gap-2 pt-2">
+                                    <button 
+                                        onClick={() => saveApiKey(tempApiKey)}
+                                        className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl transition">
+                                        저장하기
+                                    </button>
+                                    <button 
+                                        onClick={() => saveApiKey('')}
+                                        className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs rounded-xl transition">
+                                        초기화
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Toast Alert */}
                     {toastMessage && (
-                        <div className="fixed bottom-6 right-6 z-50 bg-indigo-600 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-indigo-400 animate-bounce">
-                            <Icon name="info" className="w-5 h-5" />
+                        <div className="fixed bottom-6 right-6 z-50 bg-indigo-600 text-white px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 border border-indigo-400 animate-bounce max-w-md">
+                            <Icon name="info" className="w-5 h-5 flex-shrink-0" />
                             <span className="text-sm font-medium">{toastMessage}</span>
                         </div>
                     )}
